@@ -6,7 +6,7 @@ import pandas as pd
 import plotly.express as px
 from datetime import date
 
-# ================= DATABASE =================
+# ---------------- DATABASE ----------------
 
 DB_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
@@ -19,14 +19,14 @@ st.set_page_config(
     layout="wide"
 )
 
-def connect():
+def get_connection():
     return sqlite3.connect(DB_PATH)
 
 def initialize_database():
-    conn = connect()
-    c = conn.cursor()
+    conn = get_connection()
+    cursor = conn.cursor()
 
-    c.execute("""
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS students (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         student_name TEXT,
@@ -37,11 +37,12 @@ def initialize_database():
         room_number TEXT,
         admission_date TEXT,
         monthly_rent REAL,
-        emergency_contact TEXT
+        emergency_contact TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
-    c.execute("""
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS rooms (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         room_number TEXT UNIQUE,
@@ -51,27 +52,18 @@ def initialize_database():
     )
     """)
 
-    c.execute("""
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS expenses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         category TEXT,
         amount REAL,
         description TEXT,
-        expense_date TEXT
+        expense_date TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
 
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS food_records (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        food_type TEXT,
-        amount REAL,
-        description TEXT,
-        food_date TEXT
-    )
-    """)
-
-    c.execute("""
+    cursor.execute("""
     CREATE TABLE IF NOT EXISTS payments (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         student_id INTEGER,
@@ -84,139 +76,64 @@ def initialize_database():
     )
     """)
 
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS food_records (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        food_type TEXT,
+        amount REAL,
+        description TEXT,
+        food_date TEXT
+    )
+    """)
+
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS budgets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        month TEXT UNIQUE,
+        budget_amount REAL
+    )
+    """)
+
     conn.commit()
     conn.close()
 
 initialize_database()
 
-def read_data(table):
-    conn = connect()
-    df = pd.read_sql_query(
-        f"SELECT * FROM {table} ORDER BY id DESC",
-        conn
-    )
+# ---------------- DATABASE FUNCTIONS ----------------
+
+def get_data(query, params=()):
+    conn = get_connection()
+    df = pd.read_sql_query(query, conn, params=params)
     conn.close()
     return df
 
-def insert_data(table, columns, values):
-    conn = connect()
-    placeholders = ", ".join(["?"] * len(values))
-    column_names = ", ".join(columns)
-
-    conn.execute(
-        f"INSERT INTO {table} ({column_names}) VALUES ({placeholders})",
-        values
-    )
-    conn.commit()
-    conn.close()
-
-def update_data(table, record_id, columns, values):
-    conn = connect()
-    assignments = ", ".join([f"{col}=?" for col in columns])
-
-    conn.execute(
-        f"UPDATE {table} SET {assignments} WHERE id=?",
-        tuple(values) + (record_id,)
-    )
-    conn.commit()
-    conn.close()
-
-def delete_data(table, record_id):
-    conn = connect()
-    conn.execute(
-        f"DELETE FROM {table} WHERE id=?",
-        (record_id,)
-    )
+def execute(query, params=()):
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(query, params)
     conn.commit()
     conn.close()
 
 def money(value):
     return f"PKR {value:,.0f}"
 
-def manage_records(table, label):
-    df = read_data(table)
+# ---------------- EXPENSE CATEGORIES ----------------
 
-    st.subheader(f"Manage {label}")
+EXPENSE_CATEGORIES = [
+    "Hostel Rent",
+    "Hostel Food",
+    "University Transport",
+    "Morning University Food",
+    "Evening University Food",
+    "Personal Expenses",
+    "Shopping",
+    "Electricity",
+    "Water",
+    "Maintenance",
+    "Other"
+]
 
-    if df.empty:
-        st.info(f"No {label} records available.")
-        return
-
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-    selected_id = st.selectbox(
-        f"Select {label} Record ID to Edit or Delete",
-        df["id"].tolist(),
-        key=f"{table}_selected"
-    )
-
-    record = df[df["id"] == selected_id].iloc[0]
-
-    with st.form(f"{table}_edit_form"):
-        st.write(f"Editing Record #{selected_id}")
-
-        new_values = {}
-
-        for col in df.columns:
-            if col == "id":
-                continue
-
-            value = record[col]
-
-            if col in ["amount", "monthly_rent"]:
-                new_values[col] = st.number_input(
-                    col.replace("_", " ").title(),
-                    min_value=0.0,
-                    value=float(value) if pd.notna(value) else 0.0,
-                    key=f"{table}_{col}"
-                )
-
-            elif col == "capacity":
-                new_values[col] = st.number_input(
-                    "Capacity",
-                    min_value=1,
-                    value=int(value) if pd.notna(value) else 1,
-                    key=f"{table}_{col}"
-                )
-
-            else:
-                new_values[col] = st.text_input(
-                    col.replace("_", " ").title(),
-                    value="" if pd.isna(value) else str(value),
-                    key=f"{table}_{col}"
-                )
-
-        update_button = st.form_submit_button("💾 Update Record")
-
-        if update_button:
-            update_data(
-                table,
-                int(selected_id),
-                list(new_values.keys()),
-                list(new_values.values())
-            )
-            st.success("Record updated successfully!")
-            st.rerun()
-
-    st.divider()
-
-    confirm_delete = st.checkbox(
-        f"Confirm deletion of {label} record #{selected_id}",
-        key=f"{table}_confirm_delete"
-    )
-
-    if st.button(
-        f"🗑️ Delete Selected {label} Record",
-        key=f"{table}_delete"
-    ):
-        if confirm_delete:
-            delete_data(table, int(selected_id))
-            st.success("Record deleted successfully!")
-            st.rerun()
-        else:
-            st.warning("Please confirm deletion first.")
-
-# ================= SIDEBAR =================
+# ---------------- SIDEBAR ----------------
 
 st.sidebar.title("🏨 Hostel Management")
 
@@ -232,208 +149,285 @@ menu = st.sidebar.selectbox(
     ]
 )
 
+st.sidebar.divider()
+st.sidebar.caption("Developed by Raza Ullah")
+
+# ---------------- HEADER ----------------
+
 st.title("🏨 Smart Hostel Management System")
 st.caption("Professional Hostel Administration Dashboard")
 
-# ================= DASHBOARD =================
+# ---------------- DASHBOARD ----------------
 
 if menu == "Dashboard":
 
-    students = read_data("students")
-    rooms = read_data("rooms")
-    expenses = read_data("expenses")
-    payments = read_data("payments")
-    food = read_data("food_records")
+    st.subheader("📊 Dashboard Overview")
+
+    students = get_data("SELECT * FROM students")
+    rooms = get_data("SELECT * FROM rooms")
+    expenses = get_data("SELECT * FROM expenses")
+    payments = get_data("SELECT * FROM payments")
+
+    total_students = len(students)
+    total_rooms = len(rooms)
+
+    available_rooms = (
+        len(rooms[rooms["status"] == "Available"])
+        if total_rooms else 0
+    )
+
+    occupied_rooms = (
+        len(rooms[rooms["status"] == "Occupied"])
+        if total_rooms else 0
+    )
 
     income = (
-        payments.loc[payments["status"] == "Paid", "amount"].sum()
+        payments.loc[
+            payments["status"] == "Paid", "amount"
+        ].sum()
         if len(payments) else 0
     )
 
     total_expenses = (
-        expenses["amount"].sum() if len(expenses) else 0
+        expenses["amount"].sum()
+        if len(expenses) else 0
     )
 
     pending = (
-        payments.loc[payments["status"] == "Pending", "amount"].sum()
+        payments.loc[
+            payments["status"] == "Pending", "amount"
+        ].sum()
         if len(payments) else 0
     )
 
-    available = (
-        len(rooms[rooms["status"] == "Available"])
-        if len(rooms) else 0
-    )
+    balance = income - total_expenses
 
-    occupied = (
-        len(rooms[rooms["status"] == "Occupied"])
-        if len(rooms) else 0
-    )
+    # Dashboard cards
 
-    st.subheader("📊 Dashboard Overview")
+    c1, c2, c3 = st.columns(3)
 
-    a, b, c = st.columns(3)
-    a.metric("Total Students", len(students))
-    b.metric("Total Rooms", len(rooms))
-    c.metric("Available Rooms", available)
+    c1.metric("Total Students", total_students)
+    c2.metric("Total Rooms", total_rooms)
+    c3.metric("Available Rooms", available_rooms)
 
-    a, b, c = st.columns(3)
-    a.metric("Occupied Rooms", occupied)
-    b.metric("Total Income", money(income))
-    c.metric("Total Expenses", money(total_expenses))
+    c4, c5, c6 = st.columns(3)
 
-    a, b = st.columns(2)
-    a.metric("Pending Payments", money(pending))
-    b.metric("Remaining Balance", money(income - total_expenses))
+    c4.metric("Occupied Rooms", occupied_rooms)
+    c5.metric("Total Income", money(income))
+    c6.metric("Total Expenses", money(total_expenses))
+
+    c7, c8 = st.columns(2)
+
+    c7.metric("Pending Payments", money(pending))
+    c8.metric("Remaining Balance", money(balance))
+
+    # Recent Payments
 
     st.subheader("💳 Recent Payments")
 
     if len(payments):
+        recent_payments = payments.sort_values(
+            "id", ascending=False
+        ).head(10)
+
         st.dataframe(
-            payments.head(10),
+            recent_payments,
             use_container_width=True,
             hide_index=True
         )
     else:
         st.info("No payments available.")
 
+    # Expense Chart
+
     st.subheader("📈 Expense Summary")
 
     if len(expenses):
-        summary = expenses.groupby(
-            "category", as_index=False
-        )["amount"].sum()
+        summary = (
+            expenses.groupby("category")["amount"]
+            .sum()
+            .reset_index()
+        )
 
         fig = px.pie(
             summary,
             names="category",
             values="amount",
-            hole=0.4,
-            title="Expenses by Category"
+            title="Expenses by Category",
+            hole=0.4
         )
 
         st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No expenses added yet.")
 
-    st.metric(
-        "Food Records Total",
-        money(food["amount"].sum() if len(food) else 0)
-    )
-
-# ================= STUDENTS =================
+# ---------------- STUDENTS ----------------
 
 elif menu == "Students":
 
     st.subheader("👨‍🎓 Student Management")
 
-    with st.form("add_student"):
+    with st.form("student_form"):
+
         name = st.text_input("Student Name")
         father = st.text_input("Father Name")
         phone = st.text_input("Phone")
         cnic = st.text_input("CNIC")
         university = st.text_input("University")
         room = st.text_input("Room Number")
-        admission = st.date_input("Admission Date")
-        rent = st.number_input("Monthly Rent", min_value=0.0)
+
+        admission = st.date_input(
+            "Admission Date",
+            value=date.today()
+        )
+
+        rent = st.number_input(
+            "Monthly Rent (PKR)",
+            min_value=0.0
+        )
+
         emergency = st.text_input("Emergency Contact")
 
-        submit = st.form_submit_button("➕ Add Student")
+        submit = st.form_submit_button("Add Student")
 
         if submit:
-            if name.strip():
-                insert_data(
-                    "students",
-                    [
-                        "student_name", "father_name", "phone",
-                        "cnic", "university", "room_number",
-                        "admission_date", "monthly_rent",
-                        "emergency_contact"
-                    ],
-                    [
-                        name, father, phone, cnic, university,
-                        room, str(admission), rent, emergency
-                    ]
-                )
-                st.success("Student added!")
-                st.rerun()
-            else:
+
+            if not name.strip():
                 st.error("Student name is required.")
 
-    manage_records("students", "Students")
+            else:
+                execute("""
+                    INSERT INTO students
+                    (
+                        student_name, father_name, phone,
+                        cnic, university, room_number,
+                        admission_date, monthly_rent,
+                        emergency_contact
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    name, father, phone, cnic,
+                    university, room, str(admission),
+                    rent, emergency
+                ))
 
-# ================= ROOMS =================
+                st.success("Student added successfully!")
+                st.rerun()
+
+    st.subheader("All Students")
+
+    students = get_data("SELECT * FROM students ORDER BY id DESC")
+
+    st.dataframe(
+        students,
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ---------------- ROOMS ----------------
 
 elif menu == "Rooms":
 
     st.subheader("🚪 Room Management")
 
-    with st.form("add_room"):
+    with st.form("room_form"):
+
         room_no = st.text_input("Room Number")
-        capacity = st.number_input("Room Capacity", min_value=1)
-        rent = st.number_input("Monthly Rent", min_value=0.0)
-        status = st.selectbox(
-            "Status", ["Available", "Occupied"]
+
+        capacity = st.number_input(
+            "Room Capacity",
+            min_value=1,
+            step=1
         )
 
-        submit = st.form_submit_button("➕ Add Room")
+        rent = st.number_input(
+            "Monthly Rent (PKR)",
+            min_value=0.0
+        )
+
+        status = st.selectbox(
+            "Room Status",
+            ["Available", "Occupied"]
+        )
+
+        submit = st.form_submit_button("Add Room")
 
         if submit:
-            try:
-                if room_no.strip():
-                    insert_data(
-                        "rooms",
-                        ["room_number", "capacity", "monthly_rent", "status"],
-                        [room_no, capacity, rent, status]
-                    )
-                    st.success("Room added!")
+
+            if not room_no.strip():
+                st.error("Room number is required.")
+
+            else:
+                try:
+                    execute("""
+                        INSERT INTO rooms
+                        (room_number, capacity, monthly_rent, status)
+                        VALUES (?, ?, ?, ?)
+                    """, (room_no, capacity, rent, status))
+
+                    st.success("Room added successfully!")
                     st.rerun()
-                else:
-                    st.error("Room number is required.")
-            except sqlite3.IntegrityError:
-                st.error("Room already exists.")
 
-    manage_records("rooms", "Rooms")
+                except sqlite3.IntegrityError:
+                    st.error("This room already exists.")
 
-# ================= EXPENSES =================
+    st.subheader("All Rooms")
+
+    st.dataframe(
+        get_data("SELECT * FROM rooms ORDER BY id DESC"),
+        use_container_width=True,
+        hide_index=True
+    )
+
+# ---------------- EXPENSES ----------------
 
 elif menu == "Expenses":
 
     st.subheader("💰 Expense Management")
 
-    categories = [
-        "Hostel Rent",
-        "Hostel Food",
-        "University Transport",
-        "Morning University Food",
-        "Evening University Food",
-        "Personal Expenses",
-        "Shopping",
-        "Electricity",
-        "Water",
-        "Maintenance",
-        "Other"
-    ]
+    with st.form("expense_form"):
 
-    with st.form("add_expense"):
-        category = st.selectbox("Expense Category", categories)
-        amount = st.number_input("Amount (PKR)", min_value=0.0)
-        description = st.text_input("Description")
-        expense_date = st.date_input("Expense Date")
+        category = st.selectbox(
+            "Expense Category",
+            EXPENSE_CATEGORIES
+        )
 
-        submit = st.form_submit_button("➕ Add Expense")
+        amount = st.number_input(
+            "Amount (PKR)",
+            min_value=0.0,
+            step=100.0
+        )
+
+        description = st.text_input(
+            "Description",
+            placeholder="Enter expense details"
+        )
+
+        expense_date = st.date_input(
+            "Expense Date",
+            value=date.today()
+        )
+
+        submit = st.form_submit_button("Add Expense")
 
         if submit:
+
             if amount <= 0:
-                st.error("Amount must be greater than zero.")
+                st.error("Enter an amount greater than zero.")
+
             else:
-                conn = connect()
+                conn = get_connection()
 
                 duplicate = conn.execute("""
                     SELECT id FROM expenses
-                    WHERE category=?
-                    AND amount=?
-                    AND description=?
-                    AND expense_date=?
+                    WHERE category = ?
+                    AND amount = ?
+                    AND description = ?
+                    AND expense_date = ?
                 """, (
-                    category, amount, description.strip(),
+                    category,
+                    amount,
+                    description.strip(),
                     str(expense_date)
                 )).fetchone()
 
@@ -442,167 +436,256 @@ elif menu == "Expenses":
                 if duplicate:
                     st.warning(
                         "This exact expense already exists. "
-                        "Check the history before adding it again."
+                        "Please check before adding again."
                     )
+
                 else:
-                    insert_data(
-                        "expenses",
-                        ["category", "amount", "description", "expense_date"],
-                        [category, amount, description.strip(), str(expense_date)]
-                    )
-                    st.success("Expense added!")
+                    execute("""
+                        INSERT INTO expenses
+                        (category, amount, description, expense_date)
+                        VALUES (?, ?, ?, ?)
+                    """, (
+                        category,
+                        amount,
+                        description.strip(),
+                        str(expense_date)
+                    ))
+
+                    st.success("Expense added successfully!")
                     st.rerun()
+
+    # Expense History
 
     st.subheader("📋 Expense History")
 
-    expenses = read_data("expenses")
+    expenses = get_data(
+        "SELECT * FROM expenses ORDER BY id DESC"
+    )
 
     if len(expenses):
-        visible = expenses.drop_duplicates(
-            subset=["expense_date", "category", "amount", "description"],
+
+        # Hide exact duplicate rows in display only.
+        expenses = expenses.drop_duplicates(
+            subset=[
+                "expense_date",
+                "category",
+                "amount",
+                "description"
+            ],
             keep="first"
         )
 
+        display_expenses = expenses.rename(
+            columns={
+                "expense_date": "Date",
+                "category": "Category",
+                "amount": "Amount",
+                "description": "Description"
+            }
+        )
+
         st.dataframe(
-            visible[[
-                "id", "expense_date", "category",
-                "amount", "description"
-            ]],
+            display_expenses[
+                ["Date", "Category", "Amount", "Description"]
+            ],
             use_container_width=True,
             hide_index=True
         )
 
-        st.metric("Total Expenses", money(expenses["amount"].sum()))
-
-        st.divider()
-        st.subheader("🧹 Remove Exact Duplicate Expenses")
-
-        st.caption(
-            "This will permanently delete repeated records "
-            "with the same date, category, amount and description. "
-            "One copy will be kept."
+        st.metric(
+            "Total Expenses",
+            money(expenses["amount"].sum())
         )
 
-        confirm_cleanup = st.checkbox(
-            "I confirm that I want to remove exact duplicate expenses."
-        )
+    else:
+        st.info("No expenses added yet.")
 
-        if st.button("Remove Duplicate Expenses"):
-            if confirm_cleanup:
-                conn = connect()
-                conn.execute("""
-                    DELETE FROM expenses
-                    WHERE id NOT IN (
-                        SELECT MIN(id)
-                        FROM expenses
-                        GROUP BY expense_date, category, amount, description
-                    )
-                """)
-                conn.commit()
-                conn.close()
-
-                st.success("Duplicate expenses removed!")
-                st.rerun()
-            else:
-                st.warning("Please confirm first.")
-
-    manage_records("expenses", "Expenses")
-
-# ================= FOOD =================
+# ---------------- FOOD MANAGEMENT ----------------
 
 elif menu == "Food Management":
 
     st.subheader("🍽️ Food Management")
 
-    with st.form("add_food"):
+    with st.form("food_form"):
+
         food_type = st.selectbox(
             "Food Type",
             ["Breakfast", "Lunch", "Dinner", "Snacks", "Other"]
         )
 
-        amount = st.number_input("Amount (PKR)", min_value=0.0)
-        description = st.text_input("Description")
-        food_date = st.date_input("Food Date")
+        amount = st.number_input(
+            "Food Expense (PKR)",
+            min_value=0.0
+        )
 
-        submit = st.form_submit_button("➕ Add Food Record")
+        description = st.text_input("Description")
+
+        food_date = st.date_input(
+            "Food Date",
+            value=date.today()
+        )
+
+        submit = st.form_submit_button("Add Food Record")
 
         if submit:
-            if amount > 0:
-                insert_data(
-                    "food_records",
-                    ["food_type", "amount", "description", "food_date"],
-                    [food_type, amount, description, str(food_date)]
-                )
-                st.success("Food record added!")
-                st.rerun()
-            else:
+
+            if amount <= 0:
                 st.error("Enter a valid amount.")
 
-    manage_records("food_records", "Food Records")
+            else:
+                execute("""
+                    INSERT INTO food_records
+                    (food_type, amount, description, food_date)
+                    VALUES (?, ?, ?, ?)
+                """, (
+                    food_type,
+                    amount,
+                    description,
+                    str(food_date)
+                ))
 
-# ================= PAYMENTS =================
+                st.success("Food record added!")
+                st.rerun()
+
+    food_records = get_data(
+        "SELECT * FROM food_records ORDER BY id DESC"
+    )
+
+    st.subheader("Food History")
+
+    st.dataframe(
+        food_records,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    food_total = (
+        food_records["amount"].sum()
+        if len(food_records) else 0
+    )
+
+    st.metric("Food Records Total", money(food_total))
+
+    st.caption(
+        "Food Management records are separate from Expenses. "
+        "Do not enter the same food expense in both sections."
+    )
+
+# ---------------- PAYMENTS ----------------
 
 elif menu == "Payments":
 
     st.subheader("💳 Payment Management")
 
-    students = read_data("students")
+    students = get_data(
+        "SELECT id, student_name FROM students"
+    )
 
-    with st.form("add_payment"):
+    with st.form("payment_form"):
 
         if len(students):
+
             selected = st.selectbox(
                 "Select Student",
                 students["id"].tolist(),
                 format_func=lambda x: students.loc[
-                    students["id"] == x, "student_name"
+                    students["id"] == x,
+                    "student_name"
                 ].iloc[0]
             )
+
         else:
             selected = None
-            st.warning("Add a student first.")
+            st.warning("Please add a student first.")
 
-        amount = st.number_input("Amount (PKR)", min_value=0.0)
-        payment_date = st.date_input("Payment Date")
+        amount = st.number_input(
+            "Payment Amount (PKR)",
+            min_value=0.0
+        )
+
+        payment_date = st.date_input(
+            "Payment Date",
+            value=date.today()
+        )
+
         method = st.selectbox(
-            "Payment Method", ["Cash", "Bank", "Online"]
+            "Payment Method",
+            ["Cash", "Bank", "Online"]
         )
+
         status = st.selectbox(
-            "Payment Status", ["Paid", "Pending"]
+            "Payment Status",
+            ["Paid", "Pending"]
         )
+
         description = st.text_input("Description")
 
-        submit = st.form_submit_button("➕ Add Payment")
+        submit = st.form_submit_button("Add Payment")
 
         if submit:
-            if selected is not None and amount > 0:
+
+            if selected is None:
+                st.error("Add a student before recording payment.")
+
+            elif amount <= 0:
+                st.error("Enter a valid payment amount.")
+
+            else:
+
                 student_name = students.loc[
                     students["id"] == selected,
                     "student_name"
                 ].iloc[0]
 
-                insert_data(
-                    "payments",
-                    [
-                        "student_id", "student_name", "amount",
-                        "payment_date", "payment_method",
-                        "status", "description"
-                    ],
-                    [
-                        int(selected), student_name, amount,
-                        str(payment_date), method, status, description
-                    ]
-                )
+                execute("""
+                    INSERT INTO payments
+                    (
+                        student_id, student_name, amount,
+                        payment_date, payment_method,
+                        status, description
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    int(selected),
+                    student_name,
+                    amount,
+                    str(payment_date),
+                    method,
+                    status,
+                    description
+                ))
 
-                st.success("Payment added!")
+                st.success("Payment added successfully!")
                 st.rerun()
-            else:
-                st.error("Select a student and enter a valid amount.")
 
-    manage_records("payments", "Payments")
+    st.subheader("Payment Records")
 
-# ================= FOOTER =================
+    payments = get_data(
+        "SELECT * FROM payments ORDER BY id DESC"
+    )
 
-st.sidebar.divider()
-st.sidebar.caption("Smart Hostel Management System")
-st.sidebar.caption("Developed by Raza Ullah")
+    st.dataframe(
+        payments,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    paid_total = (
+        payments.loc[
+            payments["status"] == "Paid", "amount"
+        ].sum()
+        if len(payments) else 0
+    )
+
+    pending_total = (
+        payments.loc[
+            payments["status"] == "Pending", "amount"
+        ].sum()
+        if len(payments) else 0
+    )
+
+    p1, p2 = st.columns(2)
+
+    p1.metric("Paid Amount", money(paid_total))
+    p2.metric("Pending Amount", money(pending_total))
+
